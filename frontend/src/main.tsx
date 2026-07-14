@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import { RouterProvider } from 'react-router-dom'
 import { router } from '@/app/router'
+import { TaskProvider } from '@/features/tasks/task-store'
 import '@/styles/globals.css'
 
 const queryClient = new QueryClient({
@@ -13,7 +14,7 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <TaskProvider><RouterProvider router={router} /></TaskProvider>
       <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
     </QueryClientProvider>
   </StrictMode>,
