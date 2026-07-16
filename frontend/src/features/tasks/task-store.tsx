@@ -1,50 +1,26 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { apiClient } from '@/lib/api-client'
 
 export type TaskStatus = 'Pending' | 'In Progress' | 'Completed' | 'Dropped'
 export type TaskPriority = 'Low' | 'Medium' | 'High'
 export type Task = { id: string; title: string; description: string; priority: TaskPriority; dueDate: string; category: string; status: TaskStatus; createdAt: string; updatedAt: string; completedAt?: string }
 export type Activity = { id: string; type: 'created' | 'updated' | 'completed' | 'dropped' | 'deleted'; taskTitle: string; createdAt: string }
 type TaskInput = Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'completedAt'>
-type Store = { tasks: Task[]; activities: Activity[]; createTask: (input: TaskInput) => void; updateTask: (id: string, input: TaskInput) => void; setStatus: (id: string, status: TaskStatus) => void; deleteTask: (id: string) => void; getTask: (id: string) => Task | undefined }
+type Store = { tasks: Task[]; activities: Activity[]; createTask: (input: TaskInput) => Promise<void>; updateTask: (id: string, input: TaskInput) => Promise<void>; setStatus: (id: string, status: TaskStatus) => Promise<void>; deleteTask: (id: string) => Promise<void>; getTask: (id: string) => Task | undefined }
 
-const seedTasks: Task[] = []
 const TaskContext = createContext<Store | null>(null)
-const STORAGE_KEY = 'taskflow-tasks-v2'; const ACTIVITY_KEY = 'taskflow-activity-v2'
-const read = <T,>(key: string, fallback: T): T => { try { const stored = localStorage.getItem(key); return stored ? JSON.parse(stored) as T : fallback } catch { return fallback } }
 export function TaskProvider({ children }: { children: ReactNode }) {
-  const [tasks, setTasks] = useState<Task[]>(() => read(STORAGE_KEY, seedTasks)); const [activities, setActivities] = useState<Activity[]>(() => read(ACTIVITY_KEY, []))
-  useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks)), [tasks]); useEffect(() => localStorage.setItem(ACTIVITY_KEY, JSON.stringify(activities)), [activities])
-  const addActivity = (type: Activity['type'], taskTitle: string) => setActivities((items) => [{ id: crypto.randomUUID(), type, taskTitle, createdAt: new Date().toISOString() }, ...items].slice(0, 50))
+  const [tasks, setTasks] = useState<Task[]>([]); const [activities, setActivities] = useState<Activity[]>([])
+  const normalizeTask = (value: any): Task => ({ id: String(value.id), title: value.title, description: value.description, priority: value.priority, dueDate: value.due_date, category: value.category, status: value.status, createdAt: value.created_at, updatedAt: value.updated_at })
+  const load = async () => { try { const [taskResponse, activityResponse] = await Promise.all([apiClient.get('/tasks?page=1&page_size=100'), apiClient.get('/activities?limit=50')]); setTasks(taskResponse.data.data.map(normalizeTask)); setActivities(activityResponse.data.data.map((item: any) => ({ id: String(item.id), type: item.action === 'status_changed' ? 'updated' : item.action, taskTitle: item.task_id ? `Task #${item.task_id}` : 'Task', createdAt: item.timestamp }))) } catch { /* Login and API errors are surfaced by the mutation actions. */ } }
+  useEffect(() => { const authenticated = () => { if (localStorage.getItem('taskflow-access-token')) void load() }; authenticated(); window.addEventListener('taskflow-authenticated', authenticated); return () => window.removeEventListener('taskflow-authenticated', authenticated) }, [])
   const value = useMemo<Store>(() => ({
     tasks,
     activities,
-    createTask: (input) => {
-      const now = new Date().toISOString()
-      const task = { ...input, id: crypto.randomUUID(), createdAt: now, updatedAt: now, ...(input.status === 'Completed' ? { completedAt: now } : {}) }
-      setTasks((items) => [task, ...items])
-      addActivity('created', task.title)
-    },
-    updateTask: (id, input) => {
-      const existing = tasks.find((task) => task.id === id)
-      if (!existing) return
-      const now = new Date().toISOString()
-      const next = { ...existing, ...input, updatedAt: now, ...(input.status === 'Completed' ? { completedAt: existing.completedAt ?? now } : { completedAt: undefined }) }
-      setTasks((items) => items.map((task) => task.id === id ? next : task))
-      addActivity(input.status === 'Completed' && existing.status !== 'Completed' ? 'completed' : input.status === 'Dropped' && existing.status !== 'Dropped' ? 'dropped' : 'updated', next.title)
-    },
-    setStatus: (id, status) => setTasks((items) => items.map((task) => {
-      if (task.id !== id) return task
-      const now = new Date().toISOString()
-      const next = { ...task, status, updatedAt: now, ...(status === 'Completed' ? { completedAt: task.completedAt ?? now } : { completedAt: undefined }) }
-      addActivity(status === 'Completed' && task.status !== 'Completed' ? 'completed' : status === 'Dropped' && task.status !== 'Dropped' ? 'dropped' : 'updated', task.title)
-      return next
-    })),
-    deleteTask: (id) => {
-      const task = tasks.find((item) => item.id === id)
-      if (!task) return
-      setTasks((items) => items.filter((item) => item.id !== id))
-      addActivity('deleted', task.title)
-    },
+    createTask: async (input) => { const response = await apiClient.post('/tasks', { ...input, due_date: input.dueDate }); setTasks((items) => [normalizeTask(response.data), ...items]); await load() },
+    updateTask: async (id, input) => { const response = await apiClient.put(`/tasks/${id}`, { ...input, due_date: input.dueDate }); setTasks((items) => items.map((task) => task.id === id ? normalizeTask(response.data) : task)); await load() },
+    setStatus: async (id, status) => { const task = tasks.find((item) => item.id === id); if (!task) return; const response = await apiClient.put(`/tasks/${id}`, { title: task.title, description: task.description, priority: task.priority, status, category: task.category, due_date: task.dueDate }); setTasks((items) => items.map((item) => item.id === id ? normalizeTask(response.data) : item)); await load() },
+    deleteTask: async (id) => { await apiClient.delete(`/tasks/${id}`); setTasks((items) => items.filter((task) => task.id !== id)); await load() },
     getTask: (id) => tasks.find((task) => task.id === id),
   }), [tasks, activities])
   return <TaskContext.Provider value={value}>{children}</TaskContext.Provider>
