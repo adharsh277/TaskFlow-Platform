@@ -3,3 +3,13 @@ dist/
 .env
 .env.local
 *.tsbuildinfo
+
+# Python backend
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+backend/.env
+backend/*.db
+*.log
